@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MKTJS Space - NES Edition</title>
+  <style>
+    html,body{height:100%;margin:0;background:#000010;display:flex;align-items:center;justify-content:center;}
+    #gameCanvas{ width: min(480px, 95vw); height: calc(min(640px, 95vh)); image-rendering: pixelated; background: radial-gradient(circle at center, #000018, #000000 80%); display:block; }
+    body { font-family: monospace; color: #fff;}
+    #hint{position:fixed; left:12px; bottom:12px; font-size:12px; opacity:0.9}
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="480" height="640"></canvas>
+  <!-- Local audio files -->
+  <audio id="shootSound" src="shoot.wav"></audio>
+  <audio id="bgMusic" src="bgmusic.wav" loop></audio>
+
+  <div id="hint">Controls: A ← | D → | W ↑ | S ↓ | Space = Shoot (when you have ammo)</div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    // scale handling for crisp pixel look
+    function fitCanvas(){
+      const cssW = Math.min(480, window.innerWidth * 0.95);
+      const cssH = Math.min(640, window.innerHeight * 0.95);
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      // maintain internal resolution
+      canvas.width = 480;
+      canvas.height = 640;
+      // disable smoothing for pixel look
+      ctx.imageSmoothingEnabled = false;
+    }
+    window.addEventListener('resize', fitCanvas);
+    fitCanvas();
+
+    const ship = { x: 240, y: 580, size: 16, color: '#00FFFF', canShoot: false, lives: 3 };
+    const bullets = [];
+    const asteroids = [];
+    const explosions = [];
+    const powerups = [];
+    const stars = Array.from({length: 80}, () => ({x: Math.random()*480, y: Math.random()*640, s: Math.random()*2}));
+
+    let score = 0;
+    let ammo = 0;
+
+    const shootSound = document.getElementById('shootSound');
+    const bgMusic = document.getElementById('bgMusic');
+    bgMusic.volume = 0.4;
+
+    // start music on first user gesture (browser policy)
+    document.body.addEventListener('click', () => { if (bgMusic.paused) bgMusic.play(); }, { once:true });
+
+    document.addEventListener('keydown', e => {
+      if (e.code === 'KeyA') ship.x = Math.max(ship.x - 20, 8);
+      if (e.code === 'KeyD') ship.x = Math.min(ship.x + 20, 480-8);
+      if (e.code === 'KeyW') ship.y = Math.max(ship.y - 20, 8);
+      if (e.code === 'KeyS') ship.y = Math.min(ship.y + 20, 640-8);
+      if (e.code === 'Space' && ship.canShoot && ammo > 0) shoot();
+    });
+
+    function shoot() {
+      bullets.push({ x: ship.x, y: ship.y - ship.size, size: 4, color: '#FFFF00' });
+      try{ shootSound.currentTime = 0; shootSound.play(); }catch(e){}
+      ammo--;
+    }
+
+    function spawnAsteroid() {
+      asteroids.push({ x: Math.random() * canvas.width, y: -20, size: 14 + Math.random() * 14, color: '#888' });
+    }
+
+    function spawnPowerup() {
+      const colors = ['#00AFFF', '#FF3333'];
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      powerups.push({ x: Math.random() * canvas.width, y: -20, size: 8, color });
+    }
+
+    function updateStars() {
+      ctx.fillStyle = '#000010';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'white';
+      for (let s of stars) {
+        s.y += Math.max(0.4, s.s * 0.8);
+        if (s.y > 640) { s.y = 0; s.x = Math.random() * 480; }
+        ctx.fillRect(Math.floor(s.x), Math.floor(s.y), Math.max(1, Math.round(s.s)), Math.max(1, Math.round(s.s)));
+      }
+    }
+
+    function update() {
+      updateStars();
+
+      // Draw ship (pixel style, Galaga-like)
+      ctx.fillStyle = ship.color;
+      ctx.fillRect(ship.x - 2, ship.y - 6, 4, 6);
+      ctx.fillRect(ship.x - 6, ship.y, 12, 6);
+      ctx.fillRect(ship.x - 2, ship.y + 6, 4, 6);
+
+      // Bullets
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.y -= 8;
+        ctx.fillStyle = b.color;
+        ctx.fillRect(b.x - 1, b.y - 4, 2, 4);
+        if (b.y < 0) bullets.splice(i, 1);
+      }
+
+      // Asteroids
+      for (let i = asteroids.length - 1; i >= 0; i--) {
+        const a = asteroids[i];
+        a.y += 3;
+        ctx.fillStyle = a.color;
+        ctx.fillRect(a.x - a.size/2, a.y - a.size/2, a.size, a.size);
+
+        if (a.y > canvas.height) asteroids.splice(i, 1);
+
+        const dxShip = a.x - ship.x;
+        const dyShip = a.y - ship.y;
+        const distShip = Math.sqrt(dxShip * dxShip + dyShip * dyShip);
+        if (distShip < a.size + ship.size) {
+          asteroids.splice(i, 1);
+          ship.lives--;
+          createExplosion(ship.x, ship.y);
+          if (ship.lives <= 0) {
+            alert(`GAME OVER!\nScore: ${score}`);
+            document.location.reload();
+          }
+        }
+
+        for (let j = bullets.length - 1; j >= 0; j--) {
+          const b = bullets[j];
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < a.size + b.size) {
+            bullets.splice(j, 1);
+            asteroids.splice(i, 1);
+            createExplosion(a.x, a.y);
+            score += 10;
+            break;
+          }
+        }
+      }
+
+      // Powerups
+      for (let i = powerups.length - 1; i >= 0; i--) {
+        const p = powerups[i];
+        p.y += 2;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+
+        const dx = p.x - ship.x;
+        const dy = p.y - ship.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < p.size + ship.size) {
+          if (p.color === '#FF3333') {
+            ship.canShoot = true;
+            ammo = 30;
+            setTimeout(() => ship.canShoot = false, 10000);
+          }
+          if (p.color === '#00AFFF') ship.lives++;
+          powerups.splice(i, 1);
+        }
+      }
+
+      // Explosions
+      for (let i = explosions.length - 1; i >= 0; i--) {
+        const ex = explosions[i];
+        ex.life--;
+        ex.particles.forEach(pt => {
+          pt.x += pt.vx;
+          pt.y += pt.vy;
+          ctx.fillStyle = `rgba(255,${100+Math.random()*155},0,${ex.life/20})`;
+          ctx.fillRect(Math.floor(pt.x), Math.floor(pt.y), 2, 2);
+        });
+        if (ex.life <= 0) explosions.splice(i, 1);
+      }
+
+      // HUD
+      ctx.fillStyle = 'white';
+      ctx.font = '12px monospace';
+      ctx.fillText(`SCORE: ${score}`, 20, 30);
+      ctx.fillText(`LIVES: ${ship.lives}`, 20, 50);
+      ctx.fillText(`AMMO: ${ammo}`, 20, 70);
+
+      if (Math.random() < 0.02) spawnAsteroid();
+      if (Math.random() < 0.005) spawnPowerup();
+
+      requestAnimationFrame(update);
+    }
+
+    function createExplosion(x, y) {
+      const particles = [];
+      for (let i = 0; i < 12; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 4,
+          vy: (Math.random() - 0.5) * 4
+        });
+      }
+      explosions.push({ particles, life: 20 });
+    }
+
+    fitCanvas();
+    update();
+  </script>
+</body>
+</html>
